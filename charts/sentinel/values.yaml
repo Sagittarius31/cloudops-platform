@@ -1,0 +1,95 @@
+replicaCount: 2
+
+image:
+  repository: ""          # e.g. <account>.dkr.ecr.<region>.amazonaws.com/sentinel
+  tag: "latest"           # CI sets this to the git SHA
+  pullPolicy: IfNotPresent
+
+config:
+  checkInterval: "30s"
+  checkTimeout: "10s"
+  workers: 10
+  retentionDays: 7
+  allowPrivateTargets: false   # SSRF protection: keep false outside local dev
+
+# --- Where do DATABASE_URL and API_TOKENS come from? Pick exactly ONE mode ---
+# Mode A (dev/learning): postgres.enabled=true  -> chart creates in-cluster Postgres + a Secret
+# Mode B (production):   externalSecrets.enabled=true, postgres.enabled=false
+#                        -> External Secrets Operator syncs RDS credentials + API token from AWS Secrets Manager
+# Mode C (bring your own): both false + database.existingSecret (Secret with keys DATABASE_URL and API_TOKENS)
+database:
+  existingSecret: ""
+
+auth:
+  token: "change-me-dev-only-token-0123"   # Mode A only (>=16 chars). Full access. Never use in real environments.
+  readToken: ""                            # Mode A only (>=16 chars). Optional read-only token.
+  # Optional per-user auth: accept JWTs from your OIDC provider IN ADDITION to the static token.
+  oidc:
+    issuer: ""          # e.g. https://login.microsoftonline.com/<tenant>/v2.0
+    audience: ""        # your API's client id / audience
+    jwksUrl: ""         # e.g. https://login.microsoftonline.com/<tenant>/discovery/v2.0/keys
+    readRole: ""        # role/scope required to READ  (empty = any valid token)
+    writeRole: ""       # role/scope required to WRITE (empty = any valid token)
+
+postgres:
+  enabled: true           # in-cluster Postgres for dev/learning ONLY
+  image: postgres:16-alpine
+  user: sentinel
+  password: change-me-dev-only
+  db: sentinel
+  storage: 5Gi
+  storageClass: ""
+
+externalSecrets:
+  enabled: false
+  storeName: aws-secretsmanager     # ClusterSecretStore name (see gitops/platform*)
+  # source "rds":    build DATABASE_URL from an RDS-managed {username,password} secret + rdsHost (AWS)
+  # source "direct": the store already holds a complete DATABASE_URL secret (Azure Key Vault, or any store)
+  source: rds
+  apiTokenSecretName: ""            # store key holding the API token (AWS: secret name, Azure: Key Vault secret name)
+  readTokenSecretName: ""           # optional: store key holding a read-only token
+  # --- source: rds ---
+  rdsSecretArn: ""                  # terraform output rds_master_secret_arn
+  rdsHost: ""                       # terraform output rds_address
+  dbName: sentinel
+  # "require" = encrypted. "verify-full" = encrypted + verifies the RDS certificate/hostname using the
+  # AWS RDS CA bundle baked into the image (/certs/rds-ca.pem). Use verify-full for production.
+  sslMode: require
+  # --- source: direct ---
+  databaseUrlSecretName: ""         # store key holding the full postgres:// URL
+
+resources:
+  requests: {cpu: 100m, memory: 64Mi}
+  limits: {memory: 256Mi}
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+serviceMonitor:
+  enabled: false          # enable once kube-prometheus-stack (CRDs) is installed
+  interval: 15s
+
+prometheusRule:
+  enabled: false          # enable once kube-prometheus-stack (CRDs) is installed
+
+networkPolicy:
+  enabled: false
+  # Namespaces allowed to reach the API on :8080 (Prometheus lives in "monitoring").
+  # Add your ingress-controller namespace here if you expose the API through one.
+  ingressNamespaces: ["monitoring"]   # with ingress enabled add the controller namespace, e.g. ["monitoring", "traefik"]
+
+# Public HTTPS access. Routes ONLY /api and /healthz -- /metrics and /readyz are never exposed.
+# Needs an ingress controller (Traefik app in gitops) and cert-manager (+ ClusterIssuer in gitops/platform*).
+ingress:
+  enabled: false
+  className: traefik
+  host: ""                          # e.g. sentinel.example.com (create a DNS record pointing at the load balancer)
+  clusterIssuer: letsencrypt-staging  # switch to letsencrypt-prod once staging works
+  annotations: {}

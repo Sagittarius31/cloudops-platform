@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sentinel.fullname" . }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "sentinel.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        {{- include "sentinel.selectorLabels" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "sentinel.selectorLabels" . | nindent 14 }}
+      containers:
+        - name: sentinel
+          image: "{{ required "image.repository is required" .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sentinel.appSecretName" . }}
+                  key: DATABASE_URL
+            - name: API_TOKENS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sentinel.appSecretName" . }}
+                  key: API_TOKENS
+            - name: API_READ_TOKENS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sentinel.appSecretName" . }}
+                  key: API_READ_TOKENS
+                  optional: true
+            {{- if .Values.auth.oidc.issuer }}
+            - name: OIDC_ISSUER
+              value: {{ .Values.auth.oidc.issuer | quote }}
+            - name: OIDC_AUDIENCE
+              value: {{ required "auth.oidc.audience is required when auth.oidc.issuer is set" .Values.auth.oidc.audience | quote }}
+            - name: OIDC_JWKS_URL
+              value: {{ required "auth.oidc.jwksUrl is required when auth.oidc.issuer is set" .Values.auth.oidc.jwksUrl | quote }}
+            {{- if .Values.auth.oidc.readRole }}
+            - name: OIDC_READ_ROLE
+              value: {{ .Values.auth.oidc.readRole | quote }}
+            {{- end }}
+            {{- if .Values.auth.oidc.writeRole }}
+            - name: OIDC_WRITE_ROLE
+              value: {{ .Values.auth.oidc.writeRole | quote }}
+            {{- end }}
+            {{- end }}
+            - name: CHECK_INTERVAL
+              value: {{ .Values.config.checkInterval | quote }}
+            - name: CHECK_TIMEOUT
+              value: {{ .Values.config.checkTimeout | quote }}
+            - name: CHECK_WORKERS
+              value: {{ .Values.config.workers | quote }}
+            - name: RETENTION_DAYS
+              value: {{ .Values.config.retentionDays | quote }}
+            - name: ALLOW_PRIVATE_TARGETS
+              value: {{ .Values.config.allowPrivateTargets | quote }}
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sentinel-aks
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/YOUR_GITHUB_USERNAME/cloudops-platform.git
+    targetRevision: main
+    path: charts/sentinel
+    helm:
+      valueFiles:
+        - values-aks.yaml
+        # Key Vault + Flexible Server mode: also add  - values-aks-kv.yaml  (see docs/multi-cloud.md)
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sentinel
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - SkipDryRunOnMissingResource=true

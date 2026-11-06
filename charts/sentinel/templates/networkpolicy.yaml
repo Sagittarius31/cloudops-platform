@@ -1,0 +1,83 @@
+{{- if .Values.networkPolicy.enabled }}
+# Sentinel pods: deny all ingress except from allowed namespaces on :8080; egress only to
+# DNS, the database, and outbound HTTP(S) for health checks. (EKS needs the VPC CNI
+# network-policy feature enabled, AKS needs a network policy engine -- both set in Terraform.)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "sentinel.fullname" . }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "sentinel.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  {{- if .Values.networkPolicy.ingressNamespaces }}
+  ingress:
+    - from:
+        {{- range .Values.networkPolicy.ingressNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: 8080
+          protocol: TCP
+  {{- end }}
+  egress:
+    - to:   # DNS
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+    {{- if .Values.postgres.enabled }}
+    - to:   # in-cluster Postgres
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: postgres
+      ports:
+        - {port: 5432, protocol: TCP}
+    {{- end }}
+    {{- if .Values.externalSecrets.enabled }}
+    - to:   # managed database in private subnets (RDS / Azure Flexible Server) -- narrow to your VNet/VPC CIDR if you prefer
+        - ipBlock:
+            cidr: 10.0.0.0/8
+      ports:
+        - {port: 5432, protocol: TCP}
+    {{- end }}
+    - to:   # outbound health checks (public internet only; private ranges excluded)
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16]
+      ports:
+        - {port: 80, protocol: TCP}
+        - {port: 443, protocol: TCP}
+{{- if .Values.postgres.enabled }}
+---
+# In-cluster Postgres only accepts connections from sentinel pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "sentinel.fullname" . }}-postgres
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: postgres
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "sentinel.selectorLabels" . | nindent 14 }}
+      ports:
+        - {port: 5432, protocol: TCP}
+{{- end }}
+{{- end }}

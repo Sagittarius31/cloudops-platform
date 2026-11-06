@@ -1,0 +1,35 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+backend.hcl
+crash.log
+# Go
+*.test
+*.out
+/bin/
+# Misc
+.env
+.DS_Store
+.idea/
+.vscode/
+
+# Environment files
+.env.*
+!.env.example
+
+# Credentials and private keys
+*.pem
+*.key
+*.p12
+*.pfx
+.aws/
+
+# Kubernetes local configuration
+kubeconfig
+*.kubeconfig
+
+# Terraform local files
+.terraform.tfstate.lock.info

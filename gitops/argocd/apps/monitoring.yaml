@@ -1,0 +1,59 @@
+# Prometheus + Grafana + Alertmanager via kube-prometheus-stack.
+# Chart version verified Nov 2026; bump deliberately via PR (see docs/versions.md).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: default
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    targetRevision: 87.19.2
+    helm:
+      valuesObject:
+        grafana:
+          adminPassword: change-me   # dev only; move to a Secret for anything real
+        prometheus:
+          prometheusSpec:
+            # Pick up ServiceMonitors/PrometheusRules from any namespace, not only this release's.
+            serviceMonitorSelectorNilUsesHelmValues: false
+            ruleSelectorNilUsesHelmValues: false
+            retention: 3d
+        alertmanager:
+          alertmanagerSpec:
+            # Secret "alertmanager-slack" (key: url) is created by External Secrets (see monitoring-config*).
+            secrets: [alertmanager-slack]
+          config:
+            route:
+              receiver: "null"
+              group_by: [alertname, namespace]
+              group_wait: 30s
+              group_interval: 5m
+              repeat_interval: 4h
+              routes:
+                - receiver: "null"
+                  matchers: ['alertname=~"Watchdog|InfoInhibitor"']
+                - receiver: slack
+                  matchers: ['severity=~"critical|warning"']
+            receivers:
+              - name: "null"
+              - name: slack
+                slack_configs:
+                  # Default Slack title/text are used: this chart runs Helm tpl over the config, so custom
+                  # Go templates would need escaping.
+                  - api_url_file: /etc/alertmanager/secrets/alertmanager-slack/url
+                    send_resolved: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true   # the Prometheus CRDs are too large for client-side apply

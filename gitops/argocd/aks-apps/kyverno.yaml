@@ -1,0 +1,32 @@
+# Kyverno on AKS. The admission controller uses a workload identity with AcrPull so it can read
+# signatures from ACR. VERIFY the value paths below against the chart version you deploy.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kyverno
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  project: default
+  source:
+    repoURL: https://kyverno.github.io/kyverno/
+    chart: kyverno
+    targetRevision: 3.6.3
+    helm:
+      valuesObject:
+        admissionController:
+          rbac:
+            serviceAccount:
+              name: kyverno-admission-controller
+              annotations:
+                azure.workload.identity/client-id: REPLACE_WITH_KYVERNO_CLIENT_ID
+                azure.workload.identity/tenant-id: REPLACE_WITH_TENANT_ID
+          podLabels:
+            azure.workload.identity/use: "true"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kyverno
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [CreateNamespace=true, ServerSideApply=true]

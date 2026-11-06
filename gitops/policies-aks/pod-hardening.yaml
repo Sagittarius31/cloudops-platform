@@ -1,0 +1,47 @@
+# Baseline guardrails for the sentinel namespace (Audit first; switch to Enforce when clean).
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: sentinel-pod-hardening
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: require-non-root
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [sentinel]
+      validate:
+        message: "Pods must set runAsNonRoot: true."
+        pattern:
+          spec:
+            securityContext:
+              runAsNonRoot: true
+    - name: disallow-latest-tag
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [sentinel]
+      validate:
+        message: "Images must not use the ':latest' tag; pin to a version or git SHA."
+        pattern:
+          spec:
+            containers:
+              - image: "!*:latest"
+    - name: require-resource-limits
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [sentinel]
+      validate:
+        message: "Containers must set a memory limit."
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  limits:
+                    memory: "?*"

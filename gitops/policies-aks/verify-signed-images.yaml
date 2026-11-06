@@ -1,0 +1,29 @@
+# AKS/ACR variant of the signature policy. Audit first; switch to Enforce once valid images pass.
+# Replace YOUR_GITHUB_USERNAME below.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-sentinel-image-signature
+spec:
+  validationFailureAction: Audit
+  webhookTimeoutSeconds: 30
+  failurePolicy: Ignore
+  rules:
+    - name: verify-cosign-keyless
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [sentinel]
+      verifyImages:
+        - imageReferences:
+            - "*.azurecr.io/sentinel*"
+          imageRegistryCredentials:
+            helpers: ["azure"]
+          attestors:
+            - entries:
+                - keyless:
+                    subject: "https://github.com/YOUR_GITHUB_USERNAME/cloudops-platform/.github/workflows/ci.yml@refs/heads/main"
+                    issuer: "https://token.actions.githubusercontent.com"
+                    rekor:
+                      url: https://rekor.sigstore.dev

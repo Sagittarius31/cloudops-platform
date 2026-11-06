@@ -1,0 +1,20 @@
+# App-of-apps: apply this ONE manifest after installing ArgoCD; it creates everything in ./apps
+# IMPORTANT: replace YOUR_GITHUB_USERNAME below (3 files) with your GitHub username.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/YOUR_GITHUB_USERNAME/cloudops-platform.git
+    targetRevision: main
+    path: gitops/argocd/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

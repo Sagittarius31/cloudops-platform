@@ -1,0 +1,8 @@
+# EKS "production-style" overlay: RDS + External Secrets. Add after values-dev.yaml in the ArgoCD valueFiles.
+postgres:
+  enabled: false
+externalSecrets:
+  enabled: true
+  rdsSecretArn: "REPLACE_WITH_rds_master_secret_arn"
+  rdsHost: "REPLACE_WITH_rds_address"
+  apiTokenSecretName: "REPLACE_WITH_api_token_secret_name"

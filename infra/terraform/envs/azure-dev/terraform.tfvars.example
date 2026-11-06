@@ -1,0 +1,5 @@
+acr_name = "cloudopsYOURNAME123"   # must be lowercase letters/digits, globally unique
+# api_authorized_ip_ranges = ["203.0.113.10/32"]
+kv_name     = "cloudops-kv-YOURNAME"   # globally unique, 3-24 chars
+github_repo = "YOUR_GITHUB_USERNAME/cloudops-platform"
+# enable_postgres = true                  # production-style DB (then use values-aks-kv.yaml)

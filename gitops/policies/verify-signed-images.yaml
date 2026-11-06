@@ -1,0 +1,31 @@
+# Only accept sentinel images signed (keyless, via cosign) by THIS repo's CI workflow on main.
+# Starts in Audit mode: violations are reported but not blocked. After you confirm that valid
+# images pass, change validationFailureAction to Enforce.
+# Replace YOUR_GITHUB_USERNAME below.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-sentinel-image-signature
+spec:
+  validationFailureAction: Audit
+  webhookTimeoutSeconds: 30
+  failurePolicy: Ignore
+  rules:
+    - name: verify-cosign-keyless
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [sentinel]
+      verifyImages:
+        - imageReferences:
+            - "*.dkr.ecr.*.amazonaws.com/sentinel*"
+          imageRegistryCredentials:
+            helpers: ["amazon"]
+          attestors:
+            - entries:
+                - keyless:
+                    subject: "https://github.com/YOUR_GITHUB_USERNAME/cloudops-platform/.github/workflows/ci.yml@refs/heads/main"
+                    issuer: "https://token.actions.githubusercontent.com"
+                    rekor:
+                      url: https://rekor.sigstore.dev

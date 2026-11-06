@@ -1,0 +1,207 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: sentinel
+
+jobs:
+  go:
+    name: Go vet, test, vuln check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: app/go.mod
+          cache-dependency-path: app/go.sum
+      - run: go vet ./...
+        working-directory: app
+      - run: go test -race -cover ./...
+        working-directory: app
+      - name: govulncheck (known vulnerabilities in dependencies)
+        working-directory: app
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  helm:
+    name: Helm lint + render every mode
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Mode A (in-cluster Postgres)
+        run: |
+          helm lint charts/sentinel --set image.repository=example/sentinel
+          helm template t charts/sentinel -f charts/sentinel/values-dev.yaml \
+            --set image.repository=example/sentinel > /dev/null
+      - name: Mode B (External Secrets + RDS)
+        run: |
+          helm template t charts/sentinel -f charts/sentinel/values-dev.yaml -f charts/sentinel/values-rds.yaml \
+            --set image.repository=example/sentinel \
+            --set externalSecrets.rdsSecretArn=arn:aws:secretsmanager:ap-south-1:111111111111:secret:x \
+            --set externalSecrets.rdsHost=db.example.internal \
+            --set externalSecrets.apiTokenSecretName=cloudops-dev/sentinel/api-token > /dev/null
+      - name: Mode C (existing secret)
+        run: |
+          helm template t charts/sentinel --set image.repository=example/sentinel \
+            --set postgres.enabled=false --set database.existingSecret=my-secret > /dev/null
+      - name: AKS values render
+        run: helm template t charts/sentinel -f charts/sentinel/values-aks.yaml > /dev/null
+      - name: AKS Key Vault mode (External Secrets, direct source)
+        run: |
+          helm template t charts/sentinel -f charts/sentinel/values-aks.yaml -f charts/sentinel/values-aks-kv.yaml > /dev/null
+      - name: Ingress + TLS render
+        run: |
+          helm template t charts/sentinel --set image.repository=example/sentinel \
+            --set ingress.enabled=true --set ingress.host=sentinel.example.com > /dev/null
+      - name: verify-full DB TLS + read-only token render (Mode B)
+        run: |
+          helm template t charts/sentinel -f charts/sentinel/values-rds.yaml --set image.repository=example/sentinel \
+            --set externalSecrets.rdsSecretArn=arn:aws:secretsmanager:ap-south-1:111111111111:secret:x \
+            --set externalSecrets.rdsHost=db.example.internal --set externalSecrets.sslMode=verify-full \
+            --set externalSecrets.apiTokenSecretName=api-token --set externalSecrets.readTokenSecretName=read-token > /dev/null
+      - name: OIDC per-user auth render
+        run: |
+          helm template t charts/sentinel --set image.repository=example/sentinel \
+            --set auth.oidc.issuer=https://issuer.example --set auth.oidc.audience=sentinel-api \
+            --set auth.oidc.jwksUrl=https://issuer.example/keys --set auth.oidc.readRole=sentinel.read \
+            --set auth.oidc.writeRole=sentinel.write > /dev/null
+
+  terraform:
+    name: Terraform fmt + validate (AWS and Azure)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive infra
+      - name: validate bootstrap
+        working-directory: infra/terraform/bootstrap
+        run: |
+          terraform init -backend=false
+          terraform validate
+      - name: validate AWS dev env
+        working-directory: infra/terraform/envs/dev
+        run: |
+          terraform init -backend=false
+          terraform validate
+      - name: validate Azure dev env
+        working-directory: infra/terraform/envs/azure-dev
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+  security:
+    name: Secret + IaC scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Trivy IaC / Helm misconfiguration scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "0"   # report-only at first; set to "1" once findings are triaged
+
+  image:
+    name: Build, scan, SBOM
+    runs-on: ubuntu-latest
+    needs: [go]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: app
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+      - name: Trivy image scan (fails on fixable HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Generate SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: cyclonedx
+          output: sbom.cdx.json
+          exit-code: "0"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.cdx.json
+
+  publish:
+    name: Push + sign image (ECR)
+    if: github.ref == 'refs/heads/main' && vars.AWS_ROLE_ARN != ''
+    needs: [go, helm, terraform, security, image]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # OIDC: to AWS (push) and to Sigstore (keyless signing)
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - uses: docker/setup-buildx-action@v3
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: app
+          push: true
+          tags: ${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign image by digest (keyless)
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "$IMAGE"
+
+  publish-acr:
+    name: Push + sign image (ACR)
+    if: github.ref == 'refs/heads/main' && vars.AZURE_CLIENT_ID != ''
+    needs: [go, helm, terraform, security, image]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # OIDC: to Azure (push) and to Sigstore (keyless signing)
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Log in to ACR
+        run: az acr login --name "${{ vars.ACR_NAME }}"
+      - uses: docker/setup-buildx-action@v3
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: app
+          push: true
+          tags: ${{ vars.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign image by digest (keyless)
+        env:
+          IMAGE: ${{ vars.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "$IMAGE"

@@ -1,0 +1,10 @@
+# AKS "production-style" overlay: Azure Key Vault (+ optional Flexible Server) via External Secrets.
+# Add after values-aks.yaml in the ArgoCD valueFiles of gitops/argocd/aks-apps/sentinel.yaml.
+postgres:
+  enabled: false
+externalSecrets:
+  enabled: true
+  storeName: azure-keyvault
+  source: direct
+  databaseUrlSecretName: sentinel-database-url
+  apiTokenSecretName: sentinel-api-token

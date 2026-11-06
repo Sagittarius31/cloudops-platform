@@ -1,0 +1,5 @@
+# Create once with the Azure CLI (see README), then copy to backend.hcl (gitignored):
+resource_group_name  = "cloudops-tfstate-rg"
+storage_account_name = "REPLACE_UNIQUE_STORAGE_ACCOUNT_NAME"
+container_name       = "tfstate"
+key                  = "azure-dev.tfstate"

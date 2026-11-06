@@ -1,0 +1,11 @@
+# EKS dev cluster, Mode A (in-cluster Postgres). CI/you update image.tag to roll out.
+image:
+  repository: "REPLACE_WITH_ECR_URL"   # terraform output ecr_repository_url
+  tag: "REPLACE_WITH_GIT_SHA"
+serviceMonitor:
+  enabled: true
+prometheusRule:
+  enabled: true
+networkPolicy:
+  enabled: true
+  ingressNamespaces: ["monitoring", "traefik"]   # Prometheus + the Traefik ingress controller

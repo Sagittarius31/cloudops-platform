@@ -1,0 +1,61 @@
+{{- if .Values.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "sentinel.fullname" . }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: sentinel-slo
+      rules:
+        - alert: SentinelDown
+          expr: up{job=~".*sentinel.*"} == 0
+          for: 2m
+          labels: {severity: critical}
+          annotations:
+            summary: "Sentinel API is down"
+            runbook: "docs/runbooks/api-down.md"
+
+        - alert: SentinelFastBurn
+          # Burning budget 14.4x too fast over both 5m and 1h windows (pages a human).
+          expr: |
+            (
+              sum(rate(sentinel_http_requests_total{status=~"5.."}[5m])) / sum(rate(sentinel_http_requests_total[5m])) > (14.4 * 0.005)
+            ) and (
+              sum(rate(sentinel_http_requests_total{status=~"5.."}[1h])) / sum(rate(sentinel_http_requests_total[1h])) > (14.4 * 0.005)
+            )
+          for: 2m
+          labels: {severity: critical}
+          annotations:
+            summary: "API error budget is burning very fast"
+            runbook: "docs/runbooks/high-error-rate.md"
+
+        - alert: SentinelSlowBurn
+          expr: |
+            (
+              sum(rate(sentinel_http_requests_total{status=~"5.."}[30m])) / sum(rate(sentinel_http_requests_total[30m])) > (6 * 0.005)
+            ) and (
+              sum(rate(sentinel_http_requests_total{status=~"5.."}[6h])) / sum(rate(sentinel_http_requests_total[6h])) > (6 * 0.005)
+            )
+          for: 15m
+          labels: {severity: warning}
+          annotations:
+            summary: "API error budget is burning steadily"
+            runbook: "docs/runbooks/high-error-rate.md"
+
+        - alert: SentinelHighLatencyP95
+          expr: |
+            histogram_quantile(0.95, sum by (le) (rate(sentinel_http_request_duration_seconds_bucket[5m]))) > 0.5
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "API p95 latency above 500ms"
+
+        - alert: MonitoredTargetDown
+          expr: sentinel_target_up == 0
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: "Monitored target {{ "{{" }} $labels.target {{ "}}" }} is failing checks"
+{{- end }}

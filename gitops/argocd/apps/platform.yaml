@@ -1,0 +1,20 @@
+# Cluster-wide config that depends on the add-on CRDs (e.g. the External Secrets ClusterSecretStore).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/YOUR_GITHUB_USERNAME/cloudops-platform.git
+    targetRevision: main
+    path: gitops/platform
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: external-secrets
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [SkipDryRunOnMissingResource=true]
